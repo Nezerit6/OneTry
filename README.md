@@ -15,7 +15,6 @@ OneTry adds permanent death mechanics with multiple difficulty modes:
 - **Normal** - Standard Mindustry gameplay
 - **Hardcore** - No respawn after death, optional save deletion
 - **Ultra** - 100x damage taken, automatic save deletion
-- **Death** - 1 HP maximum, instant death mode *(unlock by tapping Ultra 10 times)*
 
 ## Building from Source
 
