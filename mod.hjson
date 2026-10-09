@@ -3,6 +3,6 @@ name: "onetry"
 author: "Nezerit6"
 main: "ot.OneTry"
 description: "Hardcore permadeath mod for Mindustry."
-version: v0.1-test
-minGameVersion: 146
+version: "1.0"
+minGameVersion: 154
 java: true

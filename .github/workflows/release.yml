@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up PATH
+      run: echo "${ANDROID_HOME}/build-tools/34.0.0" >> $GITHUB_PATH
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: 17
+    - name: Build
+      run: |
+        chmod +x ./gradlew
+        ./gradlew deploy
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: build/libs/${{ github.event.repository.name }}.jar
+        make_latest: true
