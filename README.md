@@ -5,33 +5,29 @@
 [![Version](https://img.shields.io/github/v/release/Nezerit6/OneTry?color=green&include_prereleases&label=Latest%20version&logo=github&logoColor=white&style=for-the-badge)](https://github.com/Nezerit6/OneTry/releases)
 [![Downloads](https://img.shields.io/github/downloads/Nezerit6/OneTry/total?color=red&label=Total%20Downloads&logo=github&logoColor=white&style=for-the-badge)](https://github.com/Nezerit6/OneTry/releases)
 
-> A hardcore permadeath mod for [Mindustry](https://github.com/Anuken/Mindustry).  
-> One life. One chance. No respawn.
+A permadeath mod for [Mindustry](https://github.com/Anuken/Mindustry). Campaign only.
 
-## Features
+> [!WARNING]
+> This hasn't been tested in a full playthrough yet, so something will probably break somewhere. If you run into anything weird, please report it on the [Discord](https://discord.gg/TCXj7jaRR8) or in the [issues](https://github.com/Nezerit6/OneTry/issues). It really helps.
 
-OneTry adds permanent death mechanics with multiple difficulty modes:
+Settings are under the **OneTry** button on the planet map, right below vanilla Difficulty.
 
-- **Normal** - Standard Mindustry gameplay
-- **Hardcore** - No respawn after death, optional save deletion
-- **Ultra** - 100x damage taken, automatic save deletion
+## Stakes
 
-## Building from Source
+- **Safe**: plain vanilla.
+- **Mortal**: one death and the run is over. Wiping progress on death is optional.
+- **Brittle**: 10x damage taken, dying wipes your progress.
 
-### Prerequisites
-- JDK 17 or higher
-- Git
+On Mortal and Brittle ore is finite: drills and miners slowly use up the tiles under them. Point at an ore tile and the whole vein lights up with how much is left.
 
-### Building
+## Industry
 
-```bash
-git clone https://github.com/Nezerit6/OneTry
-cd OneTry
-gradlew jar
-```
+Slows crafters, unit factories and reconstructors: **Full**, **Slow** (70%), **Meager** (45%).
 
-The built mod will be in `build/libs`.
+## Co-op
+
+Host settings apply to everyone. A friend who dies spectates, only the host dying ends the run.
 
 ## Credits
 
-**Developer**: Nezerit6
+Made by Nezerit6. Bugs and ideas go on the [Discord](https://discord.gg/TCXj7jaRR8) or in the [issues](https://github.com/Nezerit6/OneTry/issues).
