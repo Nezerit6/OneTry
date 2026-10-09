@@ -1,171 +1,302 @@
 package ot;
 
 import arc.Core;
-import arc.scene.ui.*;
+import arc.func.Cons;
+import arc.func.Func;
+import arc.graphics.Color;
+import arc.scene.ui.CheckBox;
+import arc.scene.ui.Label;
+import arc.scene.ui.TextButton;
+import arc.scene.ui.layout.Scl;
+import arc.struct.Seq;
 import arc.scene.ui.layout.Table;
+import arc.util.Align;
+import mindustry.gen.Call;
+import mindustry.gen.Icon;
+import mindustry.gen.Tex;
+import mindustry.graphics.Pal;
 import mindustry.ui.Styles;
 import mindustry.ui.dialogs.BaseDialog;
-import mindustry.ui.dialogs.SettingsMenuDialog.SettingsTable;
 
 import static arc.Core.bundle;
 import static mindustry.Vars.*;
 
 public class OneTrySettings {
-    public static final String KEY_DIFFICULTY_MODE = "ot-difficulty-mode";
-    public static final String KEY_DELETE_SAVES = "ot-delete-saves";
-    public static final String KEY_WARNING_SHOWN = "ot-warning-shown";
-    public static final String KEY_DEATH_UNLOCKED = "ot-death-unlocked";
+    public static final String KEY_STAKE = "ot-stake";
+    public static final String KEY_WIPE_PROGRESS = "ot-wipe-progress";
+    public static final String KEY_INTRO_SHOWN = "ot-intro-shown";
+    public static final String KEY_RUN_LOCKED = "ot-run-locked";
+    public static final String KEY_RUN_LOST = "ot-run-lost";
 
-    public static final String MODE_NORMAL = "normal";
-    public static final String MODE_HARDCORE = "hardcore";
-    public static final String MODE_ULTRA = "ultra";
-    public static final String MODE_DEATH = "death";
+    public static final String SAFE = "safe";
+    public static final String MORTAL = "mortal";
+    public static final String BRITTLE = "brittle";
+    public static final String TERMINAL = "terminal";
 
-    private static int ultraTapCounter = 0;
-    private static boolean settingsInitialized = false;
+    public static final String[] stakes = {SAFE, MORTAL, BRITTLE};
 
-    public static void init() {
-        initializeDefaults();
-        ui.settings.addCategory(bundle.get("onetry.settings.title"), "onetry-icon",
-                t -> buildSettingsUIForMenu(t));
-    }
+    public static final String TAG_STAKE = "onetry-stake";
+    public static final String TAG_WIPE = "onetry-wipe";
+    public static final String TAG_INDUSTRY = "onetry-industry";
+
+    private static boolean settingsInitialized;
 
     public static void initializeDefaults() {
         if (!settingsInitialized) {
-            if (!Core.settings.has(KEY_DIFFICULTY_MODE))
-                Core.settings.put(KEY_DIFFICULTY_MODE, MODE_NORMAL);
-            if (!Core.settings.has(KEY_DELETE_SAVES))
-                Core.settings.put(KEY_DELETE_SAVES, false);
-            if (!Core.settings.has(KEY_WARNING_SHOWN))
-                Core.settings.put(KEY_WARNING_SHOWN, false);
-            if (!Core.settings.has(KEY_DEATH_UNLOCKED))
-                Core.settings.put(KEY_DEATH_UNLOCKED, false);
+            if (!Core.settings.has(KEY_STAKE)) Core.settings.put(KEY_STAKE, SAFE);
+            if (!Core.settings.has(KEY_WIPE_PROGRESS)) Core.settings.put(KEY_WIPE_PROGRESS, false);
+            if (!Core.settings.has(KEY_INTRO_SHOWN)) Core.settings.put(KEY_INTRO_SHOWN, false);
+            if (!Core.settings.has(KEY_RUN_LOCKED)) Core.settings.put(KEY_RUN_LOCKED, false);
+            if (!Core.settings.has(KEY_RUN_LOST)) Core.settings.put(KEY_RUN_LOST, false);
+            OneTryIndustry.initializeDefaults();
             Core.settings.forceSave();
             settingsInitialized = true;
         }
     }
 
-    public static String getDifficultyMode() {
-        return Core.settings.getString(KEY_DIFFICULTY_MODE, MODE_NORMAL);
+    public static String getStake() {
+        String stake = guest() ? state.rules.tags.get(TAG_STAKE, SAFE) : Core.settings.getString(KEY_STAKE, SAFE);
+        if (stake.equals(MORTAL) || stake.equals(BRITTLE)) return stake;
+        if (stake.equals(TERMINAL)) return BRITTLE;
+        return SAFE;
     }
 
-    public static boolean isNormalMode() { return getDifficultyMode().equals(MODE_NORMAL); }
-    public static boolean isHardcoreMode() { return getDifficultyMode().equals(MODE_HARDCORE); }
-    public static boolean isUltraMode() { return getDifficultyMode().equals(MODE_ULTRA); }
-    public static boolean isDeathMode() { return getDifficultyMode().equals(MODE_DEATH); }
-    public static boolean isDeathUnlocked() { return Core.settings.getBool(KEY_DEATH_UNLOCKED, false); }
-    public static boolean hasShownWarning() { return Core.settings.getBool(KEY_WARNING_SHOWN, false); }
+    public static boolean isSafe() { return getStake().equals(SAFE); }
+    public static boolean isBrittle() { return getStake().equals(BRITTLE); }
+    public static boolean isTerminal() { return getStake().equals(TERMINAL); }
+    public static boolean hasShownIntro() { return Core.settings.getBool(KEY_INTRO_SHOWN, false); }
 
-    public static void unlockDeathMode() {
-        Core.settings.put(KEY_DEATH_UNLOCKED, true);
+    public static void markIntroShown() {
+        Core.settings.put(KEY_INTRO_SHOWN, true);
         Core.settings.forceSave();
     }
 
-    public static void markWarningShown() {
-        Core.settings.put(KEY_WARNING_SHOWN, true);
+    public static boolean isWipeForced() { return isBrittle() || isTerminal(); }
+
+    public static boolean wipeOnDeath() {
+        if (guest()) return isWipeForced() || state.rules.tags.getBool(TAG_WIPE);
+        return isWipeForced() || Core.settings.getBool(KEY_WIPE_PROGRESS, false);
+    }
+
+    public static boolean guest() {
+        return net.client();
+    }
+
+    public static void shareRules() {
+        if (guest() || state.isMenu()) return;
+        state.rules.tags.put(TAG_STAKE, getStake());
+        state.rules.tags.put(TAG_WIPE, String.valueOf(wipeOnDeath()));
+        state.rules.tags.put(TAG_INDUSTRY, OneTryIndustry.get());
+        if (net.server()) Call.setRules(state.rules);
+    }
+
+    public static float oreRichness() {
+        return oreRichnessOf(getStake());
+    }
+
+    public static float oreRichnessOf(String stake) {
+        switch (stake) {
+            case TERMINAL: return 0.35f;
+            case BRITTLE: return 0.6f;
+            case MORTAL: return 1f;
+            default: return 0f;
+        }
+    }
+
+    public static float incomingDamageMultiplier() {
+        return isBrittle() ? 10f : 1f;
+    }
+
+    public static String statLine(String nameKey, String value) {
+        return "[lightgray]" + bundle.get(nameKey) + ":[] [negstat]" + value + "[]";
+    }
+
+    public static String stakeStats(String stake) {
+        if (stake.equals(SAFE)) return bundle.get("onetry.stat.nomodifiers");
+
+        StringBuilder text = new StringBuilder();
+        float richness = oreRichnessOf(stake);
+        String ore = bundle.get("onetry.stat.ore.finite");
+        if (richness < 1f) ore += ", -" + Math.round((1f - richness) * 100f) + "%";
+        text.append(statLine("onetry.stat.ore", ore));
+
+        if (stake.equals(BRITTLE)) {
+            text.append("\n").append(statLine("onetry.stat.damage.you", "x10"));
+        } else if (stake.equals(TERMINAL)) {
+            text.append("\n").append(statLine("onetry.stat.damage.you", "x\u221E"));
+            text.append("\n").append(statLine("onetry.stat.damage.cores", "x\u221E"));
+        }
+
+        text.append("\n").append(statLine("onetry.stat.respawn", bundle.get("onetry.stat.no")));
+
+        boolean forced = stake.equals(BRITTLE) || stake.equals(TERMINAL);
+        text.append("\n").append(statLine("onetry.stat.wipe",
+                bundle.get(forced ? "onetry.stat.wipe.always" : "onetry.stat.wipe.optional")));
+
+        return text.toString();
+    }
+
+    public static boolean isRunLocked() {
+        return isTerminal() && Core.settings.getBool(KEY_RUN_LOCKED, false);
+    }
+
+    public static void lockRun() {
+        if (!isTerminal() || isRunLocked()) return;
+        Core.settings.put(KEY_RUN_LOCKED, true);
         Core.settings.forceSave();
+    }
+
+    public static void unlockRun() {
+        Core.settings.put(KEY_RUN_LOCKED, false);
+        Core.settings.forceSave();
+    }
+
+    public static boolean isRunLost() { return Core.settings.getBool(KEY_RUN_LOST, false); }
+
+    public static void markRunLost() {
+        Core.settings.put(KEY_RUN_LOST, true);
+        Core.settings.forceSave();
+    }
+
+    public static void clearRunLost() {
+        Core.settings.put(KEY_RUN_LOST, false);
+        Core.settings.forceSave();
+    }
+
+    public static Color stakeColor(String stake) {
+        switch (stake) {
+            case MORTAL: return Color.orange;
+            case BRITTLE: return Pal.remove;
+            case TERMINAL: return Color.scarlet;
+            default: return Pal.heal;
+        }
+    }
+
+    public static float cardWidth() {
+        return Math.min(Core.graphics.getWidth() / Scl.scl(1.05f) - Scl.scl(48f), 520f);
     }
 
     public static void showDifficultyDialog() {
         Core.app.post(() -> {
-            BaseDialog dialog = new BaseDialog(bundle.get("onetry.settings.title"));
+            BaseDialog dialog = new BaseDialog(bundle.get("onetry.title"));
             dialog.setFillParent(false);
-            dialog.cont.table(t -> buildSettingsUI(t)).width(600f).pad(10f).row();
+            dialog.cont.pane(t -> buildUI(t)).scrollX(false)
+                    .maxHeight(Core.graphics.getHeight() / Scl.scl(1f) - 160f).pad(10f).row();
             dialog.addCloseButton();
+            dialog.hidden(OneTrySettings::shareRules);
             dialog.show();
         });
     }
 
-    private static void buildSettingsUIForMenu(SettingsTable table) {
-        buildDifficultyUI(table, true);
-    }
+    private static void buildUI(Table table) {
+        table.clear();
+        table.top();
 
-    private static void buildSettingsUI(Table content) {
-        buildDifficultyUI(content, false);
-    }
+        boolean locked = isRunLocked();
+        float width = cardWidth();
 
-    private static void buildDifficultyUI(Table table, boolean isMenu) {
-        if (isMenu) table.clear();
-        else table.clear();
-
-        String currentMode = getDifficultyMode();
-        boolean deathUnlocked = isDeathUnlocked();
-        final boolean[] isUpdating = {false};
-
-        table.add("[accent]" + bundle.get("onetry.settings.diff.title"))
-                .left().padTop(3f).padBottom(isMenu ? 0f : 10f).row();
-
-        ButtonGroup<CheckBox> group = new ButtonGroup<>();
-        group.setMinCheckCount(1);
-
-        addModeCheckbox(table, group, MODE_NORMAL, currentMode, isUpdating, isMenu, false);
-        addModeCheckbox(table, group, MODE_HARDCORE, currentMode, isUpdating, isMenu, false);
-
-        CheckBox ultraBox = addModeCheckbox(table, group, MODE_ULTRA, currentMode, isUpdating, isMenu, true);
-        ultraBox.clicked(() -> {
-            if (isUpdating[0] || deathUnlocked) return;
-            ultraTapCounter++;
-            if (ultraTapCounter >= 10) {
-                ultraTapCounter = 0;
-                isUpdating[0] = true;
-                unlockDeathMode();
-                setMode(MODE_DEATH, true);
-                ui.showInfoFade("[scarlet]" + bundle.get("onetry.settings.mode.death.unlocked", "DEATH MODE UNLOCKED!"));
-                buildDifficultyUI(table, isMenu);
-                isUpdating[0] = false;
-            }
-        });
-
-        if (deathUnlocked) {
-            addModeCheckbox(table, group, MODE_DEATH, currentMode, isUpdating, isMenu, true);
+        if (locked) {
+            table.table(Styles.black6, note -> {
+                note.image(Icon.lock).size(26f).color(Pal.remove).padRight(10f);
+                note.add(bundle.get("onetry.stake.locked")).color(Pal.remove)
+                        .width(width - 80f).wrap().left();
+            }).width(width).pad(6f).padBottom(6f).row();
         }
 
-        if (isMenu) {
-            table.image(Styles.black6).height(4f).growX().padTop(8f).padBottom(8f).row();
-        } else {
-            table.add().height(16f).row();
-        }
+        axis(table, width, "onetry.stake", stakes, getStake(), locked,
+                stake -> {
+                    setStake(stake);
+                    Core.app.post(() -> buildUI(table));
+                },
+                OneTrySettings::stakeColor);
 
-        CheckBox deleteSaves = new CheckBox(bundle.get("onetry.settings.delete.saves"));
-        deleteSaves.setChecked(Core.settings.getBool(KEY_DELETE_SAVES, false));
-        deleteSaves.setDisabled(isUltraMode() || isDeathMode());
-        table.add(deleteSaves).left().padTop(isMenu ? 3f : 4f).row();
-
-        deleteSaves.changed(() -> {
-            if (!deleteSaves.isDisabled() && !isUpdating[0]) {
-                Core.settings.put(KEY_DELETE_SAVES, deleteSaves.isChecked());
+        CheckBox wipe = new CheckBox(bundle.get("onetry.wipe"));
+        wipe.setChecked(wipeOnDeath());
+        wipe.setDisabled(() -> isSafe() || isWipeForced() || locked);
+        wipe.changed(() -> {
+            if (!wipe.isDisabled()) {
+                Core.settings.put(KEY_WIPE_PROGRESS, wipe.isChecked());
                 Core.settings.forceSave();
             }
         });
+        table.add(wipe).left().padTop(10f).row();
+
+        axis(table, width, "onetry.industry", OneTryIndustry.tiers, OneTryIndustry.get(), false,
+                tier -> {
+                    OneTryIndustry.set(tier);
+                    Core.app.post(() -> buildUI(table));
+                },
+                OneTryIndustry::color);
     }
 
-    private static CheckBox addModeCheckbox(Table table, ButtonGroup<CheckBox> group,
-                                            String mode, String currentMode, boolean[] isUpdating, boolean isMenu, boolean forceDelete) {
-        CheckBox box = new CheckBox(bundle.get("onetry.settings.mode." + mode));
-        box.setChecked(currentMode.equals(mode));
-        box.addListener(new Tooltip(t -> t.background(Styles.black6).margin(4f)
-                .add(bundle.get("onetry.settings.mode." + mode + ".tip")).width(300f).wrap()));
-        group.add(box);
-        table.add(box).left().padTop(isMenu ? 3f : 4f).padBottom(isMenu ? 0f : 4f).row();
+    private static void axis(Table table, float width, String prefix, String[] tiers, String current,
+                             boolean locked, Cons<String> onSelect, Func<String, Color> colors) {
+        table.add("[accent]" + bundle.get(prefix + ".title")).left().padTop(14f).padBottom(6f).row();
 
-        box.changed(() -> {
-            if (isUpdating[0] || !box.isChecked()) return;
-            isUpdating[0] = true;
-            ultraTapCounter = 0;
-            setMode(mode, forceDelete);
-            buildDifficultyUI(table, isMenu);
-            isUpdating[0] = false;
-        });
+        Seq<String> visible = new Seq<>();
+        visible.addAll(tiers);
 
-        return box;
+        int perRow = width < 420f ? 2 : visible.size;
+        float buttonWidth = (width - (perRow - 1) * 6f) / perRow;
+
+        table.table(rows -> {
+            for (int i = 0; i < visible.size; i++) {
+                String tier = visible.get(i);
+                boolean selected = current.equals(tier);
+
+                TextButton button = new TextButton(bundle.get(prefix + "." + tier), Styles.flatTogglet);
+                button.setChecked(selected);
+                button.setDisabled(() -> locked);
+                button.getLabel().setWrap(true);
+                button.getLabel().setAlignment(Align.center);
+                button.getLabelCell().grow().pad(4f);
+
+                if (!locked) {
+                    button.clicked(() -> {
+                        if (!selected) onSelect.get(tier);
+                    });
+                }
+
+                rows.add(button).size(buttonWidth, 56f).pad(3f);
+                if (i % perRow == perRow - 1) rows.row();
+            }
+        }).width(width).row();
+
+        float textWidth = width - 40f;
+        float height = 0f;
+        for (String tier : visible) height = Math.max(height, textHeight(details(prefix, tier), textWidth));
+
+        final float panelHeight = height + 18f;
+        table.table(Styles.black6, info -> {
+            info.image(Tex.whiteui, colors.get(current)).growY().width(5f);
+            info.add(details(prefix, current)).color(Color.lightGray)
+                    .width(textWidth).wrap().labelAlign(Align.topLeft).growY().top().pad(8f).padLeft(10f);
+        }).width(width).height(panelHeight).padTop(6f).row();
     }
 
-    private static void setMode(String mode, boolean forceDelete) {
-        Core.settings.put(KEY_DIFFICULTY_MODE, mode);
-        if (forceDelete || mode.equals(MODE_ULTRA) || mode.equals(MODE_DEATH)) {
-            Core.settings.put(KEY_DELETE_SAVES, true);
-        } else if (mode.equals(MODE_NORMAL)) {
-            Core.settings.put(KEY_DELETE_SAVES, false);
+    private static String details(String prefix, String tier) {
+        String stats = prefix.equals("onetry.industry")
+                ? OneTryIndustry.stats(tier) : stakeStats(tier);
+        return bundle.get(prefix + "." + tier + ".tip") + "\n\n" + stats;
+    }
+
+    private static float textHeight(String text, float width) {
+        Label label = new Label(text);
+        label.setWrap(true);
+        label.setWidth(width);
+        label.layout();
+        return label.getPrefHeight();
+    }
+
+    private static void setStake(String stake) {
+        if (isRunLocked()) return;
+
+        boolean wasForced = isWipeForced();
+        Core.settings.put(KEY_STAKE, stake);
+        if (isWipeForced()) {
+            Core.settings.put(KEY_WIPE_PROGRESS, true);
+        } else if (wasForced || stake.equals(SAFE)) {
+            Core.settings.put(KEY_WIPE_PROGRESS, false);
         }
         Core.settings.forceSave();
     }

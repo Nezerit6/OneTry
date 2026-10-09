@@ -1,23 +1,28 @@
 package ot;
 
 import arc.util.Log;
+import mindustry.Vars;
 import mindustry.mod.Mod;
+import ot.graphics.draw3d.Draw3D;
+import ot.world.FiniteOres;
 
 public class OneTry extends Mod {
 
-    private OneTryFunctionality functionality;
-
     @Override
     public void init() {
-        Log.info("OneTry complete");
-
         OneTrySettings.initializeDefaults();
-        OneTrySettings.init();
+        FiniteOres.init();
+        OneTryIndustry.init();
+        new OneTryFunctionality();
 
-        functionality = new OneTryFunctionality();
-        functionality.showComplexityWarning();
+        if (!Vars.headless) {
+            Draw3D.init();
+            OneTryPlanetUI.init();
+            OneTryDeathScene.init();
+            OneTryGameOver.init();
+        }
 
-        Log.info("OneTry loaded - No respawn after death");
+        Log.info("[OneTry] loaded");
     }
 
 }
