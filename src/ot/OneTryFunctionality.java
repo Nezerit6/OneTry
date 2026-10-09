@@ -2,197 +2,240 @@ package ot;
 
 import arc.Core;
 import arc.Events;
+import arc.struct.IntFloatMap;
+import arc.struct.ObjectFloatMap;
+import arc.scene.ui.layout.Scl;
 import arc.scene.ui.layout.Table;
 import arc.util.Log;
 import arc.util.Time;
 import mindustry.Vars;
+import mindustry.content.TechTree;
 import mindustry.core.GameState;
-import mindustry.game.EventType;
-import mindustry.gen.Call;
-import mindustry.gen.Groups;
-import mindustry.gen.Player;
-import mindustry.gen.Unit;
 import mindustry.ctype.UnlockableContent;
+import mindustry.game.EventType;
+import mindustry.game.Saves.SaveSlot;
+import mindustry.gen.*;
+import mindustry.type.Planet;
+import mindustry.type.Sector;
 import mindustry.ui.dialogs.BaseDialog;
 
-import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static arc.Core.bundle;
-
 public class OneTryFunctionality {
-    private final Map<String, Integer> deathCount = new ConcurrentHashMap<>();
     private final Set<String> respawnBlocked = ConcurrentHashMap.newKeySet();
-    private final Map<String, Boolean> wasAlive = new ConcurrentHashMap<>();
+    private final Map<String, Unit> lastUnit = new ConcurrentHashMap<>();
+    private final ObjectFloatMap<String> graceTime = new ObjectFloatMap<>();
     private final Map<Integer, Float> previousHealth = new ConcurrentHashMap<>();
-    private Field deathTimerField;
+    private final IntFloatMap coreHealth = new IntFloatMap();
+    private SaveSlot lostSlot;
 
     public OneTryFunctionality() {
-        try {
-            deathTimerField = Player.class.getDeclaredField("deathTimer");
-            deathTimerField.setAccessible(true);
-        } catch (Throwable t) {
-            Log.warn("[OneTry] Can't access Player.deathTimer via reflection.");
-        }
         setupListeners();
+    }
+
+    private static boolean ignored(Player p) {
+        return Vars.net.client() && !p.isLocal();
+    }
+
+    private static boolean campaignRun() {
+        return Vars.state.isCampaign() && !Vars.net.client();
     }
 
     private void setupListeners() {
         Events.run(EventType.Trigger.update, () -> {
-            if (OneTrySettings.isNormalMode()) return;
+            if (OneTrySettings.isSafe() || !Vars.state.isCampaign()) return;
 
             Groups.player.each(p -> {
+                if (ignored(p)) return;
+
                 String uuid = p.uuid();
-                boolean alive = p.unit() != null && !p.dead();
-
-                if (wasAlive.getOrDefault(uuid, false) && !alive && !respawnBlocked.contains(uuid)) {
-                    triggerPermadeath(p);
-                }
-
                 if (respawnBlocked.contains(uuid)) {
-                    setDeathTimer(p, 0f);
-                    if (p.unit() != null) Core.app.post(p::clearUnit);
+                    if (!Vars.net.client()) {
+                        p.deathTimer = 0f;
+                        if (p.unit() != null) Core.app.post(p::clearUnit);
+                    }
+                    return;
                 }
 
-                wasAlive.put(uuid, alive);
+                Unit unit = p.unit();
+                if (unit != null && unit.isValid()) {
+                    lastUnit.put(uuid, unit);
+                    graceTime.remove(uuid, 0f);
+                    return;
+                }
+
+                Unit last = lastUnit.get(uuid);
+                if (last == null) return;
+
+                if (last.dead()) {
+                    forget(uuid);
+                    triggerPermadeath(p, last);
+                    return;
+                }
+
+                float waited = graceTime.get(uuid, 0f) + Time.delta;
+                if (!Vars.net.client() || !last.isAdded() || waited > 60f) {
+                    forget(uuid);
+                } else {
+                    graceTime.put(uuid, waited);
+                }
             });
 
-            if (OneTrySettings.isDeathMode()) {
-                Groups.unit.each(u -> {
-                    if (u.isPlayer()) {
-                        u.health = Math.min(u.health, 1f);
-                        u.maxHealth = 1f;
-                    }
-                });
+            if (Vars.net.client()) return;
 
-                Groups.build.each(b -> {
-                    if (b.block != null && b.block.name.contains("core")) {
-                        b.health = Math.min(b.health, 1f);
-                        b.maxHealth = 1f;
+            if (OneTrySettings.isTerminal()) {
+                Vars.state.rules.defaultTeam.cores().each(core -> {
+                    float last = coreHealth.get(core.pos(), -1f);
+                    if (last >= 0f && core.health < last) {
+                        core.kill();
+                    } else {
+                        coreHealth.put(core.pos(), core.health);
                     }
                 });
             }
 
-            if (OneTrySettings.isUltraMode() || OneTrySettings.isDeathMode()) {
+            if (OneTrySettings.isBrittle() || OneTrySettings.isTerminal()) {
                 Groups.player.each(p -> {
-                    if (!respawnBlocked.contains(p.uuid()) && p.unit() != null) {
-                        Unit u = p.unit();
-                        Float prevHealth = previousHealth.get(u.id);
-
-                        if (prevHealth != null && u.health < prevHealth) {
-                            float damage = prevHealth - u.health;
-                            u.health = prevHealth - (damage * 100f);
-                            if (u.health <= 0) u.kill();
-                        }
-
-                        previousHealth.put(u.id, u.health);
-                    } else if (p.unit() != null) {
-                        previousHealth.remove(p.unit().id);
+                    Unit u = p.unit();
+                    if (u == null) return;
+                    if (respawnBlocked.contains(p.uuid())) {
+                        previousHealth.remove(u.id);
+                        return;
                     }
+
+                    Healthc target = u;
+                    if (u instanceof BlockUnitc bu && bu.tile() != null) target = bu.tile();
+
+                    Float prevHealth = previousHealth.get(u.id);
+                    if (prevHealth != null && OneTrySettings.isTerminal() && target.health() < prevHealth) {
+                        target.kill();
+                    } else if (prevHealth != null && prevHealth <= target.maxHealth() && target.health() < prevHealth) {
+                        float extra = (prevHealth - target.health())
+                                * (OneTrySettings.incomingDamageMultiplier() - 1f);
+                        if (extra > 0f) {
+                            if (target instanceof Building b) {
+                                b.damage(extra);
+                            } else {
+                                target.health(target.health() - extra);
+                                if (target.health() <= 0f) target.kill();
+                            }
+                        }
+                    }
+
+                    previousHealth.put(u.id, target.health());
                 });
             }
         });
 
         Events.on(EventType.UnitChangeEvent.class, e -> {
-            if (OneTrySettings.isNormalMode() || e.player == null) return;
-
-            if (respawnBlocked.contains(e.player.uuid()) && e.unit != null) {
-                Core.app.post(() -> e.player.clearUnit());
-                Call.infoMessage(e.player.con, "[scarlet]" + bundle.get("onetry.respawn.blocked"));
-            }
-        });
-
-        Events.on(EventType.PlayerJoin.class, e -> {
-            if (e.player != null) clearPlayerState(e.player.uuid(), e.player);
+            if (Vars.net.client() || OneTrySettings.isSafe() || !Vars.state.isCampaign() || e.player == null) return;
+            if (e.unit != null && respawnBlocked.contains(e.player.uuid())) Core.app.post(e.player::clearUnit);
         });
 
         Events.on(EventType.PlayerLeave.class, e -> {
-            if (e.player != null) {
-                String uuid = e.player.uuid();
-                wasAlive.remove(uuid);
-                deathCount.remove(uuid);
-                respawnBlocked.remove(uuid);
-            }
+            if (e.player != null) forget(e.player.uuid());
         });
 
         Events.on(EventType.WorldLoadEvent.class, e -> {
+            Core.app.post(OneTrySettings::shareRules);
             Core.app.post(this::clearAllPlayerState);
             previousHealth.clear();
+            coreHealth.clear();
+            if (!Vars.headless) Core.app.post(this::lockRunIfNeeded);
+        });
+
+        Events.on(EventType.GameOverEvent.class, e -> {
+            if (Vars.headless || !OneTrySettings.isTerminal() || !campaignRun() || e.winner == Vars.player.team()) return;
+            lostSlot = Vars.control.saves.getCurrent();
+            OneTrySettings.markRunLost();
+        });
+
+        Events.on(EventType.ClientLoadEvent.class, e -> {
+            if (Vars.headless) return;
+
+            Vars.ui.restart.hidden(() -> {
+                if (OneTrySettings.isRunLost() && Vars.state.isCampaign()) {
+                    Core.app.post(() -> {
+                        Vars.ui.planet.hide();
+                        exitToMenu();
+                    });
+                }
+            });
+
+            if (OneTrySettings.isRunLost()) finishLostRun();
         });
 
         Events.on(EventType.StateChangeEvent.class, e -> {
-            if (Vars.state.getState() == GameState.State.menu) {
+            if (e.to == GameState.State.menu) {
                 Core.app.post(this::clearAllPlayerState);
                 previousHealth.clear();
+                coreHealth.clear();
+                if (OneTrySettings.isRunLost()) Core.app.post(this::finishLostRun);
             }
         });
     }
 
-    private void triggerPermadeath(Player p) {
-        int deaths = deathCount.getOrDefault(p.uuid(), 0) + 1;
-        deathCount.put(p.uuid(), deaths);
-        Log.info("[OneTry] Player @ died. Count: @", p.name, deaths);
+    private void triggerPermadeath(Player p, Unit unit) {
+        Log.info("[OneTry] Player @ died.", p.name);
 
         respawnBlocked.add(p.uuid());
-        setDeathTimer(p, 0f);
+        if (!Vars.net.client()) p.deathTimer = 0f;
+        if (Vars.headless || !p.isLocal()) return;
 
-        Call.infoMessage(p.con, "[scarlet]" + bundle.get("onetry.death.title") + "!\n[lightgray]" + bundle.get("onetry.respawn.blocked"));
-        showDeathScreen();
-    }
-
-    private void setDeathTimer(Player p, float time) {
-        if (deathTimerField != null) {
-            try {
-                deathTimerField.setFloat(p, time);
-            } catch (Throwable t) {
-                Log.warn("[OneTry] Failed to set deathTimer for @", p.name);
-            }
+        if (Vars.net.client()) {
+            showDeathScreen(true);
+        } else if (OneTrySettings.wipeOnDeath()) {
+            lostSlot = Vars.control.saves.getCurrent();
+            OneTrySettings.markRunLost();
+            OneTryDeathScene.play(unit);
+        } else {
+            showDeathScreen(false);
         }
     }
 
-    public void showComplexityWarning() {
-        if (OneTrySettings.hasShownWarning()) return;
-        Core.app.post(() -> Vars.ui.showCustomConfirm(
-                bundle.get("onetry.warning.title"),
-                bundle.get("onetry.warning.text"),
-                bundle.get("onetry.warning.accept"),
-                bundle.get("onetry.settings.button"),
-                OneTrySettings::markWarningShown,
-                () -> { OneTrySettings.showDifficultyDialog(); OneTrySettings.markWarningShown(); }
-        ));
+    private void exitToMenu() {
+        if (Vars.net.client()) Vars.netClient.disconnectQuietly();
+        if (Vars.ui.paused.checkPlaytest()) return;
+        Vars.logic.reset();
     }
 
-    private void showDeathScreen() {
+    private void showDeathScreen(boolean guest) {
         Core.app.post(() -> {
-            BaseDialog dialog = new BaseDialog(bundle.get("onetry.death.title")) {
+            BaseDialog dialog = new BaseDialog(Core.bundle.get("onetry.death.title")) {
                 @Override
                 public void hide() {
+                    if (guest) super.hide();
                 }
             };
 
+            float width = Math.min(Core.graphics.getWidth() / Scl.scl(1.05f) - Scl.scl(28f), 500f);
+            String text = Core.bundle.get("onetry.death.text");
+            if (guest) text += "\n" + Core.bundle.get("onetry.death.guest");
+            else if (OneTrySettings.wipeOnDeath()) text += "\n" + Core.bundle.get("onetry.death.wipe");
+
             Table cont = dialog.cont;
-            cont.defaults().pad(10).width(500f);
-            cont.add(bundle.get("onetry.death.text")).wrap().left().row();
+            cont.defaults().pad(10).width(width);
+            cont.add(text).wrap().left().row();
 
             dialog.buttons.clear();
-            dialog.buttons.button(bundle.get("onetry.death.confirm"), () -> {
-                boolean wipeOccurred = OneTrySettings.isUltraMode() || OneTrySettings.isDeathMode() ||
-                        Core.settings.getBool(OneTrySettings.KEY_DELETE_SAVES, false);
-
-                if (wipeOccurred) {
-                    wipeProgress();
-                    Core.settings.put(OneTrySettings.KEY_WARNING_SHOWN, false);
+            if (guest) dialog.buttons.button(Core.bundle.get("onetry.death.spectate"), dialog::hide).size(180f, 55f).pad(12);
+            dialog.buttons.button(Core.bundle.get("onetry.death.confirm"), () -> {
+                if (guest) {
+                    dialog.remove();
+                    exitToMenu();
+                    return;
                 }
-
-                Time.runTask(5f, () -> {
-                    Vars.state.set(GameState.State.menu);
-                    Core.settings.forceSave();
-                    Core.app.post(() -> Core.app.post(OneTrySettings::showDifficultyDialog));
-                });
+                boolean lost = OneTrySettings.isRunLost();
+                SaveSlot current = Vars.control.saves.getCurrent();
 
                 dialog.remove();
+                exitToMenu();
+
+                if (lost) return;
+                if (OneTrySettings.wipeOnDeath() && current != null) current.delete();
+                Core.app.post(() -> Core.app.post(OneTrySettings::showDifficultyDialog));
             }).size(180f, 55f).pad(12);
 
             dialog.setFillParent(false);
@@ -200,31 +243,54 @@ public class OneTryFunctionality {
         });
     }
 
-    private void wipeProgress() {
+    private void lockRunIfNeeded() {
+        if (OneTrySettings.isTerminal() && campaignRun() && !OneTrySettings.isRunLost()) OneTrySettings.lockRun();
+    }
+
+    private void finishLostRun() {
+        if (!OneTrySettings.isRunLost() || !Vars.state.isMenu()) return;
+
+        SaveSlot slot = lostSlot;
+        lostSlot = null;
+        wipeProgress(slot);
+        OneTrySettings.clearRunLost();
+        OneTrySettings.unlockRun();
+        Core.settings.forceSave();
+        Core.app.post(() -> Core.app.post(OneTrySettings::showDifficultyDialog));
+    }
+
+    private void wipeProgress(SaveSlot current) {
         Vars.content.each(c -> { if (c instanceof UnlockableContent uc) uc.clearUnlock(); });
-        if (Vars.state.isCampaign()) Vars.universe.clearLoadoutInfo();
-        if (Vars.state.getSector() != null) Vars.state.getSector().clearInfo();
-        if (Vars.control.saves.getCurrent() != null) Vars.control.saves.getCurrent().delete();
-        Vars.content.planets().each(planet -> planet.sectors.each(sector -> sector.clearInfo()));
+        for (TechTree.TechNode node : TechTree.all) node.reset();
+        Vars.universe.clearLoadoutInfo();
+        Core.settings.remove("unlocks");
+
+        for (Planet planet : Vars.content.planets()) {
+            for (Sector sector : planet.sectors) {
+                sector.clearInfo();
+                if (sector.save != null) {
+                    sector.save.delete();
+                    sector.save = null;
+                }
+            }
+        }
+        for (SaveSlot slot : Vars.control.saves.getSaveSlots().copy()) {
+            if (slot.isSector()) slot.delete();
+        }
+        if (current != null) current.delete();
+
         clearAllPlayerState();
         Log.info("[OneTry] Progress has been wiped.");
     }
 
-    private void clearPlayerState(String uuid, Player p) {
-        respawnBlocked.remove(uuid);
-        deathCount.remove(uuid);
-        wasAlive.remove(uuid);
-        if (p != null) {
-            setDeathTimer(p, 0f);
-            Core.app.post(() -> { if (p.unit() != null) p.clearUnit(); });
-        }
+    private void forget(String uuid) {
+        lastUnit.remove(uuid);
+        graceTime.remove(uuid, 0f);
     }
 
     private void clearAllPlayerState() {
         respawnBlocked.clear();
-        deathCount.clear();
-        wasAlive.clear();
-        Groups.player.each(p -> setDeathTimer(p, 0f));
-        Log.info("[OneTry] Internal player state cleared.");
+        lastUnit.clear();
+        graceTime.clear();
     }
 }
